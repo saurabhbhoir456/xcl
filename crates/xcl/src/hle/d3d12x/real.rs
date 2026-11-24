@@ -548,6 +548,11 @@ pub fn init() -> Result<String, String> {
         }
         open_uma(&device);
         super::device_x::probe_dynamic_depth_bias(&device);
+        // Log the chosen wave mode for diagnostics (#1407)
+        let compute_wave32 = crate::gpu::recomp::pso::wave32_only_for_device(&device);
+        let graphics_wave32 = crate::gpu::recomp::pso::graphics_wave32_for_device(&device);
+        let split_forced = crate::gpu::recomp::pso::split_wave64_forced();
+        crate::xlog_info!("D3D12.X: wave mode: compute_wave32={compute_wave32}, graphics_wave32={graphics_wave32}, split_forced={split_forced}");
         let raw = device.into_raw(); // one reference kept for the process lifetime
         adopt(raw, Kind::Device);
         DEVICE.store(raw as usize, Ordering::Release);
