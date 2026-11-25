@@ -1659,8 +1659,8 @@ unsafe extern "system" fn res_release(this: *mut c_void) -> u32 {
                         if e.live_buffers > 0 {
                             e.live_buffers -= 1;
                         }
-                        // If heap was released (block is None) and no more live buffers, free the block
-                        if e.live_buffers == 0 && e.block.is_some() {
+                        // If heap was released and no more live buffers, free the block
+                        if e.released && e.live_buffers == 0 {
                             if let Some(block) = e.block.take() {
                                 if u.is_sparse(block) {
                                     super::sparse::free(block);
@@ -1668,11 +1668,13 @@ unsafe extern "system" fn res_release(this: *mut c_void) -> u32 {
                                     u.free(block);
                                 }
                             }
+                            h.remove(&heap);
                         }
                     }
                 }
-                // Note: if the heap was already removed from HEAP_UMA (mem_heap_release called),
-                // the last buffer's decrement won't find it - that's handled in mem_heap_release
+                // Note: the heap entry remains in HEAP_UMA when mem_heap_release is called with
+                // live_buffers > 0 (released = true, block stays as Some). The last buffer's
+                // res_release will find the entry and free the block when live_buffers reaches 0.
             }
         }
     }
@@ -3067,6 +3069,9 @@ struct HeapUma {
     /// Number of live placed buffers in this heap. The heap's block is freed only when this
     /// reaches zero *and* the heap has been released (refcount 0).
     live_buffers: usize,
+    /// Whether the heap has been released. When true and live_buffers reaches 0, the block
+    /// must be freed.
+    released: bool,
 }
 
 /// heap → its backing block (allocated lazily on the first placed buffer; sparse VRAM for
@@ -3103,6 +3108,7 @@ unsafe fn note_heap_uma(desc: usize, ppv: *mut *mut c_void) {
             cpu_readback: is_rb || is_custom_wb,
             block: None,
             live_buffers: 0,
+            released: false,
         },
     );
 }
@@ -3172,14 +3178,15 @@ fn heap_block(heap: usize) -> Option<(usize, bool)> {
 }
 
 /// ID3D12Heap::Release: its block of unified memory goes with it.
-/// The block is freed only when there are no more live placed buffers in the heap.
-/// If buffers remain, the heap entry is kept (with block = None) so the last buffer can free it.
+/// The block is freed when live_buffers reaches 0 AND the heap has been released.
 unsafe extern "system" fn mem_heap_release(this: *mut c_void) -> u32 {
     let f: unsafe extern "system" fn(*mut c_void) -> u32 = std::mem::transmute(orig_fn(this, 2));
     let n = f(this);
     if n == 0 {
         if let Some(h) = HEAP_UMA.lock().unwrap().as_mut() {
             if let Some(e) = h.get_mut(&(this as usize)) {
+                // Mark heap as released - block will be freed when live_buffers reaches 0
+                e.released = true;
                 if e.live_buffers == 0 {
                     // No live buffers: free the block now and remove the entry
                     if let Some(p) = e.block.take() {
@@ -3193,11 +3200,8 @@ unsafe extern "system" fn mem_heap_release(this: *mut c_void) -> u32 {
                         }
                     }
                     h.remove(&(this as usize));
-                } else {
-                    // Buffers still alive: mark heap as released (block = None) so last buffer knows to free it
-                    // We keep the entry with live_buffers count; the last buffer's Release will free the block
-                    e.block = None;
                 }
+                // If live_buffers > 0: the block stays, entry stays, last buffer's Release will free it
             }
         }
     }

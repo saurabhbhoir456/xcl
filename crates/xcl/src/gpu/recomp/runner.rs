@@ -630,6 +630,32 @@ pub fn skip_test(reason: &str) {
     let _ = writeln!(std::io::stderr(), "SKIPPED {test}: {reason}");
 }
 
+/// Serialization for tests that create D3D12 devices and access shared
+/// D3D12.X global state (LISTS, SYNC_GRAPH, COPY_SCRATCH, FENCES, etc.).
+static SERIAL_TEST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// A guard that serializes tests creating D3D12 devices and accessing shared
+/// D3D12.X global state (LISTS, SYNC_GRAPH, COPY_SCRATCH, FENCES, etc.).
+/// The guard is acquired on first call; subsequent concurrent calls get `None`
+/// and should return early. The guard is released on drop.
+pub fn serial_test() -> Option<SerialTestGuard> {
+    if SERIAL_TEST.compare_exchange(false, true, std::sync::atomic::Ordering::Acquire, std::sync::atomic::Ordering::Relaxed).is_ok() {
+        Some(SerialTestGuard)
+    } else {
+        None
+    }
+}
+
+/// Guard returned by `serial_test`. When dropped, releases the serialization.
+#[derive(Debug)]
+pub struct SerialTestGuard;
+
+impl Drop for SerialTestGuard {
+    fn drop(&mut self) {
+        SERIAL_TEST.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
 /// Run a compiled kernel (DXIL) with `state` and flat memory `mem`.
 pub fn run(dxil: &[u8], state: &KernelState, mem: &[u32]) -> Result<KernelResult, String> {
     run_with(dxil, state, mem, &[], &[])
