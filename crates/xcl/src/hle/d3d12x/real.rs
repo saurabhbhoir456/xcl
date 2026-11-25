@@ -172,14 +172,15 @@ pub fn abi_root_signature() -> Option<ID3D12RootSignature> {
 static UMA_BUFFER: Mutex<Vec<(usize, u64)>> = Mutex::new(Vec::new());
 /// the committed UMA windows opened as D3D12 heaps (indexed by window `k`; `None` for sparse windows)
 static UMA_HEAPS: Mutex<Vec<Option<usize>>> = Mutex::new(Vec::new());
-/// console buffers placed in unified memory: resource → (address, bytes)
-/// address, bytes, whether XCL allocated the memory (not: the title's own, CreatePlacedResourceX)
-type UmaBuffer = (usize, usize, bool);
+/// console buffers placed in unified memory: resource → (address, bytes, xcl_allocated, heap)
+/// address, bytes, whether XCL allocated the memory (not: the title's own, CreatePlacedResourceX),
+/// and the heap the buffer was placed in (for deferred HEAP_UMA free; 0 = no HEAP_UMA entry).
+type UmaBuffer = (usize, usize, bool, usize);
 static UMA_BUFFERS: Mutex<Option<HashMap<usize, UmaBuffer>>> = Mutex::new(None);
 
 /// Where a console-created buffer lives in unified memory (its console GPU address).
 pub fn console_buffer(res: usize) -> Option<(usize, usize)> {
-    UMA_BUFFERS.lock().unwrap().as_ref()?.get(&res).map(|&(p, n, _)| (p, n))
+    UMA_BUFFERS.lock().unwrap().as_ref()?.get(&res).map(|&(p, n, _, _)| (p, n))
 }
 
 /// Number of live console buffers in unified memory.
@@ -548,6 +549,11 @@ pub fn init() -> Result<String, String> {
         }
         open_uma(&device);
         super::device_x::probe_dynamic_depth_bias(&device);
+        // Log the chosen wave mode for diagnostics (#1407)
+        let compute_wave32 = crate::gpu::recomp::pso::wave32_only_for_device(&device);
+        let graphics_wave32 = crate::gpu::recomp::pso::graphics_wave32_for_device(&device);
+        let split_forced = crate::gpu::recomp::pso::split_wave64_forced();
+        crate::xlog_info!("D3D12.X: wave mode: compute_wave32={compute_wave32}, graphics_wave32={graphics_wave32}, split_forced={split_forced}");
         let raw = device.into_raw(); // one reference kept for the process lifetime
         adopt(raw, Kind::Device);
         DEVICE.store(raw as usize, Ordering::Release);
@@ -1255,7 +1261,7 @@ unsafe fn place_console_texture(this: *mut c_void, desc: usize, state: usize, cl
         u.free(p);
         return None;
     }
-    UMA_BUFFERS.lock().unwrap().get_or_insert_with(HashMap::new).insert(*ppv as usize, (p, size as usize, true));
+    UMA_BUFFERS.lock().unwrap().get_or_insert_with(HashMap::new).insert(*ppv as usize, (p, size as usize, true, 0));
     Some(hr)
 }
 
@@ -1311,7 +1317,7 @@ fn is_cpu_readback_buffer(props: &D3D12_HEAP_PROPERTIES, state: u32, flags: D3D1
 unsafe fn place_console_buffer_sparse(this: *mut c_void, d: &D3D12_RESOURCE_DESC, bytes: usize, state: u32, readback_on_null_map: bool, riid: *const GUID, ppv: *mut *mut c_void) -> Option<HRESULT> {
     let (p, _) = super::sparse::alloc(bytes, 0x1_0000)?;
     if let Some((hr, delta)) = super::sparse::place_buffer(this, p, d, state, riid, ppv) {
-        UMA_BUFFERS.lock().unwrap().get_or_insert_with(HashMap::new).insert(*ppv as usize, (p, bytes, true));
+        UMA_BUFFERS.lock().unwrap().get_or_insert_with(HashMap::new).insert(*ppv as usize, (p, bytes, true, 0));
         if delta != 0 {
             BUFFER_DELTA.lock().unwrap().get_or_insert_with(HashMap::new).insert(*ppv as usize, delta as u64);
         }
@@ -1377,7 +1383,13 @@ unsafe fn place_console_buffer(this: *mut c_void, props: usize, desc: usize, sta
         }
         return None;
     }
-    UMA_BUFFERS.lock().unwrap().get_or_insert_with(HashMap::new).insert(*ppv as usize, (p, bytes, true));
+    UMA_BUFFERS.lock().unwrap().get_or_insert_with(HashMap::new).insert(*ppv as usize, (p, bytes, true, heap));
+    // Increment the heap's live buffer count
+    if let Some(h) = HEAP_UMA.lock().unwrap().as_mut() {
+        if let Some(e) = h.get_mut(&heap) {
+            e.live_buffers += 1;
+        }
+    }
     // Map must hand out the same memory the shaders read (checked once)
     static CHECKED: AtomicU64 = AtomicU64::new(0);
     if CHECKED.fetch_add(1, Ordering::Relaxed) == 0 {
@@ -1416,7 +1428,7 @@ pub(super) unsafe fn place_at_title_address(this: *mut c_void, va: usize, desc: 
     // the title's own memory (a sparse window): a resource over its video-memory tiles
     if u.is_sparse(va) {
         let (hr, delta) = super::sparse::place_buffer(this, va, &d, state, riid, ppv)?;
-        UMA_BUFFERS.lock().unwrap().get_or_insert_with(HashMap::new).insert(*ppv as usize, (va, bytes, false));
+        UMA_BUFFERS.lock().unwrap().get_or_insert_with(HashMap::new).insert(*ppv as usize, (va, bytes, false, 0));
         if delta != 0 {
             BUFFER_DELTA.lock().unwrap().get_or_insert_with(HashMap::new).insert(*ppv as usize, delta as u64);
         }
@@ -1431,7 +1443,13 @@ pub(super) unsafe fn place_at_title_address(this: *mut c_void, va: usize, desc: 
     if hr < 0 || (*ppv).is_null() {
         return None;
     }
-    UMA_BUFFERS.lock().unwrap().get_or_insert_with(HashMap::new).insert(*ppv as usize, (va, bytes, false));
+    UMA_BUFFERS.lock().unwrap().get_or_insert_with(HashMap::new).insert(*ppv as usize, (va, bytes, false, heap));
+    // Increment the heap's live buffer count
+    if let Some(h) = HEAP_UMA.lock().unwrap().as_mut() {
+        if let Some(e) = h.get_mut(&heap) {
+            e.live_buffers += 1;
+        }
+    }
     if delta != 0 {
         BUFFER_DELTA.lock().unwrap().get_or_insert_with(HashMap::new).insert(*ppv as usize, delta as u64);
     }
@@ -1626,11 +1644,37 @@ unsafe extern "system" fn res_release(this: *mut c_void) -> u32 {
         super::vram::forget(this as usize);
         super::title_textures::forget(this as usize);
         let gone = UMA_BUFFERS.lock().unwrap().as_mut().and_then(|m| m.remove(&(this as usize)));
-        if let (Some((p, _, true)), Some(u)) = (gone, crate::gpu::uma::get()) {
-            if u.is_sparse(p) {
-                super::sparse::free(p);
-            } else {
-                u.free(p);
+        if let (Some((p, _, xcl_allocated, heap)), Some(u)) = (gone, crate::gpu::uma::get()) {
+            if xcl_allocated {
+                if u.is_sparse(p) {
+                    super::sparse::free(p);
+                } else {
+                    u.free(p);
+                }
+            }
+            // If this buffer was in a HEAP_UMA heap, decrement live_buffers and maybe free the block
+            if heap != 0 {
+                if let Some(h) = HEAP_UMA.lock().unwrap().as_mut() {
+                    if let Some(e) = h.get_mut(&heap) {
+                        if e.live_buffers > 0 {
+                            e.live_buffers -= 1;
+                        }
+                        // If heap was released and no more live buffers, free the block
+                        if e.released && e.live_buffers == 0 {
+                            if let Some(block) = e.block.take() {
+                                if u.is_sparse(block) {
+                                    super::sparse::free(block);
+                                } else {
+                                    u.free(block);
+                                }
+                            }
+                            h.remove(&heap);
+                        }
+                    }
+                }
+                // Note: the heap entry remains in HEAP_UMA when mem_heap_release is called with
+                // live_buffers > 0 (released = true, block stays as Some). The last buffer's
+                // res_release will find the entry and free the block when live_buffers reaches 0.
             }
         }
     }
@@ -3022,6 +3066,12 @@ struct HeapUma {
     /// in it read back on `Map(0, NULL, ...)`.
     cpu_readback: bool,
     block: Option<usize>,
+    /// Number of live placed buffers in this heap. The heap's block is freed only when this
+    /// reaches zero *and* the heap has been released (refcount 0).
+    live_buffers: usize,
+    /// Whether the heap has been released. When true and live_buffers reaches 0, the block
+    /// must be freed.
+    released: bool,
 }
 
 /// heap → its backing block (allocated lazily on the first placed buffer; sparse VRAM for
@@ -3057,6 +3107,8 @@ unsafe fn note_heap_uma(desc: usize, ppv: *mut *mut c_void) {
             prefer_coherent: is_rb && size <= COHERENT_READBACK_MAX,
             cpu_readback: is_rb || is_custom_wb,
             block: None,
+            live_buffers: 0,
+            released: false,
         },
     );
 }
@@ -3126,16 +3178,30 @@ fn heap_block(heap: usize) -> Option<(usize, bool)> {
 }
 
 /// ID3D12Heap::Release: its block of unified memory goes with it.
+/// The block is freed when live_buffers reaches 0 AND the heap has been released.
 unsafe extern "system" fn mem_heap_release(this: *mut c_void) -> u32 {
     let f: unsafe extern "system" fn(*mut c_void) -> u32 = std::mem::transmute(orig_fn(this, 2));
     let n = f(this);
     if n == 0 {
-        let gone = HEAP_UMA.lock().unwrap().as_mut().and_then(|m| m.remove(&(this as usize))).and_then(|e| e.block);
-        if let (Some(p), Some(u)) = (gone, crate::gpu::uma::get()) {
-            if u.is_sparse(p) {
-                super::sparse::free(p);
-            } else {
-                u.free(p);
+        if let Some(h) = HEAP_UMA.lock().unwrap().as_mut() {
+            if let Some(e) = h.get_mut(&(this as usize)) {
+                // Mark heap as released - block will be freed when live_buffers reaches 0
+                e.released = true;
+                if e.live_buffers == 0 {
+                    // No live buffers: free the block now and remove the entry
+                    if let Some(p) = e.block.take() {
+                        let u = crate::gpu::uma::get();
+                        if let Some(u) = u {
+                            if u.is_sparse(p) {
+                                super::sparse::free(p);
+                            } else {
+                                u.free(p);
+                            }
+                        }
+                    }
+                    h.remove(&(this as usize));
+                }
+                // If live_buffers > 0: the block stays, entry stays, last buffer's Release will free it
             }
         }
     }

@@ -4142,6 +4142,10 @@ mod tests {
     /// and is gone from it once the fence gets there.
     #[test]
     fn an_internal_wait_is_listed_until_its_fence_reaches_the_value() {
+        let _guard = crate::gpu::recomp::runner::serial_test();
+        if _guard.is_none() {
+            return;
+        }
         use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 
         unsafe {
@@ -4164,6 +4168,10 @@ mod tests {
 
     #[test]
     fn copy_scratch_budget_counts_resources_until_gpu_completion() {
+        let _guard = crate::gpu::recomp::runner::serial_test();
+        if _guard.is_none() {
+            return;
+        }
         use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 
         unsafe {
@@ -4212,6 +4220,10 @@ mod tests {
     /// scratch buffer, which the GPU may still use.
     #[test]
     fn a_new_list_takes_no_copy_scratch_of_an_earlier_one() {
+        let _guard = crate::gpu::recomp::runner::serial_test();
+        if _guard.is_none() {
+            return;
+        }
         use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 
         unsafe {
@@ -4548,6 +4560,10 @@ mod tests {
 
     #[test]
     fn depth_bias_native_list9_and_bundle_fallback() {
+        let _guard = crate::gpu::recomp::runner::serial_test();
+        if _guard.is_none() {
+            return;
+        }
         use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
         use windows::Win32::Graphics::Dxgi::*;
 
@@ -5367,6 +5383,10 @@ mod tests {
     /// land once the queue completes. Unaligned and unwritable addresses are ignored.
     #[test]
     fn timestamps_outside_unified_memory_land_after_the_queue() {
+        let _guard = crate::gpu::recomp::runner::serial_test();
+        if _guard.is_none() {
+            return;
+        }
         use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
         use windows::Win32::Graphics::Dxgi::*;
 
@@ -5442,6 +5462,10 @@ mod tests {
 
     #[test]
     fn write_buffer_immediate_on_open_existing_heap_visible_to_cpu() {
+        let _guard = crate::gpu::recomp::runner::serial_test();
+        if _guard.is_none() {
+            return;
+        }
         use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
         use windows::Win32::Graphics::Dxgi::*;
         use windows_sys::Win32::System::Memory::{VirtualAlloc, VirtualFree, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE};
@@ -5631,6 +5655,10 @@ mod tests {
     /// GPU `queue.Wait`/`queue.Signal` without blocking the submitter thread for `WAIT_TIMEOUT`.
     #[test]
     fn cross_queue_wait64_before_signal_does_not_deadlock_submit_thread() {
+        let _guard = crate::gpu::recomp::runner::serial_test();
+        if _guard.is_none() {
+            return;
+        }
         use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
         use windows::Win32::Graphics::Dxgi::*;
 
@@ -5710,6 +5738,10 @@ mod tests {
     /// complete immediately without stalling CPU or hanging GPU.
     #[test]
     fn cross_queue_cycle_and_same_queue_fifo_do_not_deadlock() {
+        let _guard = crate::gpu::recomp::runner::serial_test();
+        if _guard.is_none() {
+            return;
+        }
         use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
         use windows::Win32::Graphics::Dxgi::*;
 
@@ -5804,6 +5836,10 @@ mod tests {
     /// pipelined frame N/N+1 or back-to-back cross-queue handshakes (`wait_seq > prod_sig_seq`).
     #[test]
     fn pipelined_next_frame_write_is_not_false_cycle() {
+        let _guard = crate::gpu::recomp::runner::serial_test();
+        if _guard.is_none() {
+            return;
+        }
         use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
         use windows::Win32::Graphics::Dxgi::*;
 
@@ -5971,6 +6007,10 @@ mod tests {
     ///    already has an armed `queue.Wait` on it — must rescue the waiter instead of orphaning it.
     #[test]
     fn rotating_queue_self_deadlock_and_non_monotonic_rescue_do_not_hang() {
+        let _guard = crate::gpu::recomp::runner::serial_test();
+        if _guard.is_none() {
+            return;
+        }
         use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
         use windows::Win32::Graphics::Dxgi::*;
 
@@ -6093,6 +6133,10 @@ mod tests {
     /// already in flight (watchdog release path) does not hang subsequent queue completions.
     #[test]
     fn cpu_watchdog_signal_with_inflight_gpu_signal_completes_cleanly() {
+        let _guard = crate::gpu::recomp::runner::serial_test();
+        if _guard.is_none() {
+            return;
+        }
         use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
         use windows::Win32::Graphics::Dxgi::*;
 
@@ -6145,6 +6189,10 @@ mod tests {
     /// completes on GPU with ZERO CPU cycle breaks, and reuses `pc_c1` from the spare pool on Reset.
     #[test]
     fn mid_list_write64_wait64_split_avoids_cycle_and_reuses_spares() {
+        let _guard = crate::gpu::recomp::runner::serial_test();
+        if _guard.is_none() {
+            return;
+        }
         use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
         use windows::Win32::Graphics::Dxgi::*;
 
@@ -6297,6 +6345,10 @@ mod tests {
     /// title's address back, which the PC's GPU has no address for).
     #[test]
     fn a_mirrored_buffer_binds_its_mirror_without_asking_readable() {
+        let _guard = crate::gpu::recomp::runner::serial_test();
+        if _guard.is_none() {
+            return;
+        }
         use windows_sys::Win32::System::Memory::{VirtualAlloc, VirtualProtect, MEM_COMMIT, MEM_RESERVE, PAGE_NOACCESS, PAGE_READWRITE};
         if crate::gpu::uma::get().is_none() {
             crate::gpu::recomp::runner::skip_test("no unified memory");
